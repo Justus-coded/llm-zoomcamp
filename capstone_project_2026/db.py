@@ -175,3 +175,106 @@ def save_feedback(
     finally:
         conn.close()
 
+
+def _rows_as_dicts(rows) -> list[dict[str, Any]]:
+    """Convert psycopg2 DictRows into regular dictionaries."""
+
+    return [dict(row) for row in rows]
+
+
+def get_dashboard_data(
+    recent_limit: int = 50,
+) -> dict[str, Any]:
+    """Return conversation, relevance, feedback, and monitoring metrics."""
+
+    if recent_limit < 1:
+        raise ValueError("recent_limit must be at least 1")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*)::INTEGER AS total_conversations,
+                    COALESCE(AVG(response_time), 0)::DOUBLE PRECISION
+                        AS average_response_time,
+                    COALESCE(SUM(openai_cost), 0)::DOUBLE PRECISION
+                        AS total_openai_cost,
+                    COALESCE(AVG(total_tokens), 0)::DOUBLE PRECISION
+                        AS average_total_tokens
+                FROM conversations
+                """
+            )
+            summary = dict(cur.fetchone())
+
+            cur.execute(
+                """
+                SELECT relevance, COUNT(*)::INTEGER AS count
+                FROM conversations
+                GROUP BY relevance
+                ORDER BY count DESC
+                """
+            )
+            relevance = _rows_as_dicts(cur.fetchall())
+
+            cur.execute(
+                """
+                SELECT
+                    CASE WHEN feedback = 1 THEN 'Positive'
+                         ELSE 'Negative'
+                    END AS feedback,
+                    COUNT(*)::INTEGER AS count
+                FROM feedback
+                GROUP BY 1
+                ORDER BY 1
+                """
+            )
+            feedback = _rows_as_dicts(cur.fetchall())
+
+            cur.execute(
+                """
+                SELECT
+                    date_trunc('hour', timestamp) AS timestamp,
+                    COUNT(*)::INTEGER AS conversations,
+                    COALESCE(SUM(openai_cost), 0)::DOUBLE PRECISION AS cost,
+                    COALESCE(AVG(response_time), 0)::DOUBLE PRECISION
+                        AS average_response_time
+                FROM conversations
+                GROUP BY 1
+                ORDER BY 1
+                """
+            )
+            timeline = _rows_as_dicts(cur.fetchall())
+
+            cur.execute(
+                """
+                SELECT
+                    c.id,
+                    c.question,
+                    c.model_used,
+                    c.response_time,
+                    c.relevance,
+                    c.openai_cost,
+                    c.timestamp,
+                    COUNT(f.id)::INTEGER AS feedback_count
+                FROM conversations AS c
+                LEFT JOIN feedback AS f ON f.conversation_id = c.id
+                GROUP BY c.id
+                ORDER BY c.timestamp DESC
+                LIMIT %s
+                """,
+                (recent_limit,),
+            )
+            recent_conversations = _rows_as_dicts(cur.fetchall())
+
+        return {
+            "summary": summary,
+            "relevance": relevance,
+            "feedback": feedback,
+            "timeline": timeline,
+            "recent_conversations": recent_conversations,
+        }
+    finally:
+        conn.close()
+

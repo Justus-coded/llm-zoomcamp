@@ -75,6 +75,7 @@ data_role_assistant/
 └── rag.py          # Search, prompt construction, and LLM calls
 app.py              # Flask API
 db.py               # PostgreSQL persistence
+streamlit_app.py    # Interactive RAG tester and monitoring dashboard
 grafana/
 ├── dashboard.json   # SQL-backed Grafana dashboard
 └── init.py          # Grafana datasource/dashboard provisioning
@@ -101,7 +102,7 @@ Copy `.env.example` to `.env` and set the credentials for your environment:
 ```env
 OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-5.6-luna
-OPENAI_EVALUATION_MODEL=gpt-5.4-luna
+OPENAI_EVALUATION_MODEL=gpt-5.6-luna
 
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
@@ -121,7 +122,7 @@ Never commit `.env` or expose the API key in a notebook output.
 
 Each `/question` request makes one generation call and one evaluator call. The response includes the evaluator classification, token counts, estimated OpenAI cost, and response time.
 
-The default model names are `gpt-5.6-luna` for answer generation and `gpt-5.4-luna` for evaluation. Replace them with models available through your configured API endpoint if necessary.
+The default model name is `gpt-5.6-luna` for both answer generation and evaluation. Replace it with a model available through your configured API endpoint if necessary.
 
 ## Run the application
 
@@ -156,6 +157,21 @@ curl -X POST http://127.0.0.1:5000/feedback \
 ```
 
 The `/search` endpoint uses the boosted basic retriever. The `/question` endpoint retrieves job postings, builds a grounded prompt, calls the configured OpenAI model and evaluator, and saves the result. `/rag` remains available as a backward-compatible alias.
+
+## Run the Streamlit app
+
+Streamlit provides a simple interface for testing questions and reviewing operational metrics:
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+The app contains two views:
+
+- **Ask**: submit a job-search question, view the grounded answer, LLM-as-a-judge relevance result, latency, token usage, estimated cost, and submit positive or negative feedback.
+- **Dashboard**: view conversation count, average response time, estimated OpenAI cost, token usage, relevance classifications, feedback counts, and recent conversations.
+
+The Ask view can generate an answer without PostgreSQL, but the conversation and feedback will not be saved. The Dashboard requires PostgreSQL and the initialized schema.
 
 ## PostgreSQL and Grafana
 
@@ -239,6 +255,66 @@ The repository also contains saved evaluation outputs:
 
 - `rag1-eval-gpt-5.6-luna.csv`
 - `hybrid-rag-eval-gpt-5.6-luna.csv`
+
+### Retrieval benchmark
+
+The project generated **2,546 evaluation questions** for the first **1,273 job rows**, with two questions generated per row.
+
+Retrieval quality was measured with hit rate and mean reciprocal rank (MRR). Basic search without field boosting produced:
+
+```text
+{'hit_rate': 0.3157894736842105, 'mrr': 0.22479613212134808}
+```
+
+Random search was used to optimize field boosts over these ranges:
+
+```python
+param_ranges = {
+    "job_title": (1.0, 6.0),
+    "job_description": (0.5, 3.0),
+    "location": (0.0, 3.0),
+    "industry": (0.0, 2.5),
+    "company_name": (0.0, 2.5),
+    "sector": (0.0, 1.5),
+    "salary_estimate": (0.0, 1.5),
+}
+```
+
+The selected boost parameters were:
+
+```python
+boost = {
+    "job_title": 3.63,
+    "job_description": 1.61,
+    "location": 0.75,
+    "industry": 2.03,
+    "company_name": 2.01,
+    "sector": 0.01,
+    "salary_estimate": 0.99,
+}
+```
+
+After applying these boosts to the basic search, performance improved to:
+
+```text
+{'hit_rate': 0.5890052356020943, 'mrr': 0.41985442810050116}
+```
+
+Hybrid search using reciprocal rank fusion (RRF) improved performance further:
+
+```text
+{'hit_rate': 0.6387434554973822, 'mrr': 0.4699970913321694}
+```
+
+### LLM-as-a-judge evaluation
+
+The project evaluated 200 randomly selected answers generated with hybrid RRF search. The relevance distribution was:
+
+```text
+RELEVANT           0.835
+PARTLY_RELEVANT    0.110
+NON_RELEVANT       0.055
+```
 
 ## Generated artifacts
 

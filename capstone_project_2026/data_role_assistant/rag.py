@@ -20,7 +20,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv()
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
-EVALUATION_MODEL = os.getenv("OPENAI_EVALUATION_MODEL", "gpt-5.4-luna")
+EVALUATION_MODEL = os.getenv("OPENAI_EVALUATION_MODEL", "gpt-5.6-luna")
 
 BOOST = {
     "job_title": 3.63,
